@@ -8,6 +8,8 @@ use tokio::{
 };
 use tokio_native_tls::TlsConnector;
 
+const HTTPS_PORT: u16 = 443;
+
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 enum Method {
@@ -52,15 +54,19 @@ async fn redirect(mut stream: TcpStream, addr: &str, port: u16, buf: &[u8]) -> a
         })
         .collect::<String>();
 
-    let connector = native_tls::TlsConnector::new()?;
+    let mut proxy = TcpStream::connect((addr, port)).await?;
 
-    let connector = TlsConnector::from(connector);
-    let proxy = TcpStream::connect((addr, port)).await?;
+    if port == HTTPS_PORT {
+        let connector = native_tls::TlsConnector::new()?;
+        let connector = TlsConnector::from(connector);
+        let mut proxy = connector.connect(addr, proxy).await?;
 
-    let mut proxy = connector.connect(addr, proxy).await?;
-
-    let _ = proxy.write_all(buf.as_bytes()).await?;
-    let _ = tokio::io::copy(&mut proxy, &mut stream).await?;
+        let _ = proxy.write_all(buf.as_bytes()).await?;
+        let _ = tokio::io::copy(&mut proxy, &mut stream).await?;
+    } else {
+        let _ = proxy.write_all(buf.as_bytes()).await?;
+        let _ = tokio::io::copy(&mut proxy, &mut stream).await?;
+    }
 
     Ok(())
 }
