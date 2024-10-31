@@ -3,7 +3,7 @@ use std::fs::File;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tokio_native_tls::TlsConnector;
@@ -20,14 +20,20 @@ enum Method {
 }
 
 #[derive(Deserialize, Debug)]
-struct Proxy {
-    uri: String,
+struct ProxyAddr {
+    host: String,
     port: u16,
+}
+
+impl ProxyAddr {
+    fn to_tupple(&self) -> (&str, u16) {
+        (self.host.as_str(), self.port)
+    }
 }
 
 #[derive(Deserialize, Debug)]
 struct Config {
-    proxy: Proxy,
+    proxy_addr: ProxyAddr,
     responses: Vec<Response>,
 }
 
@@ -40,35 +46,46 @@ struct Response {
     enabled: Option<bool>,
 }
 
-async fn redirect(mut stream: TcpStream, addr: &str, port: u16, buf: &[u8]) -> anyhow::Result<()> {
+fn substitute_hostname(buf: &[u8], proxy_addr: &ProxyAddr) -> Vec<u8> {
     let request_str = String::from_utf8_lossy(buf);
 
-    let buf = request_str
+    request_str
         .lines()
-        .map(|line| {
+        .flat_map(|line| {
             if line.starts_with("Host:") {
-                format!("Host: {}:{}\r\n", addr, port)
+                format!("Host: {}:{}\r\n", proxy_addr.host, proxy_addr.port)
             } else {
                 format!("{}\r\n", line)
             }
+            .into_bytes()
         })
-        .collect::<String>();
+        .collect()
+}
 
-    let mut proxy = TcpStream::connect((addr, port)).await?;
-
-    if port == HTTPS_PORT {
-        let connector = native_tls::TlsConnector::new()?;
-        let connector = TlsConnector::from(connector);
-        let mut proxy = connector.connect(addr, proxy).await?;
-
-        let _ = proxy.write_all(buf.as_bytes()).await?;
-        let _ = tokio::io::copy(&mut proxy, &mut stream).await?;
-    } else {
-        let _ = proxy.write_all(buf.as_bytes()).await?;
-        let _ = tokio::io::copy(&mut proxy, &mut stream).await?;
-    }
+async fn proxy<C, S>(mut client: C, mut server: S, buf: &[u8]) -> anyhow::Result<()>
+where
+    C: AsyncWrite + Unpin,
+    S: AsyncWriteExt + AsyncReadExt + Unpin,
+{
+    let _ = server.write_all(&buf).await?;
+    let _ = tokio::io::copy(&mut server, &mut client).await?;
 
     Ok(())
+}
+
+async fn redirect(client: TcpStream, proxy_addr: ProxyAddr, buf: &[u8]) -> anyhow::Result<()> {
+    let buf = substitute_hostname(buf, &proxy_addr);
+
+    let server = TcpStream::connect(proxy_addr.to_tupple()).await?;
+
+    if proxy_addr.port == HTTPS_PORT {
+        let connector = native_tls::TlsConnector::new()?;
+        let connector = TlsConnector::from(connector);
+        let server = connector.connect(&proxy_addr.host, server).await?;
+        proxy(client, server, &buf).await
+    } else {
+        proxy(client, server, &buf).await
+    }
 }
 
 async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
@@ -106,13 +123,7 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
     }) {
         Some(response) => response,
         None => {
-            return redirect(
-                stream,
-                config.proxy.uri.as_str(),
-                config.proxy.port,
-                content,
-            )
-            .await;
+            return redirect(stream, config.proxy_addr, content).await;
         }
     };
 
