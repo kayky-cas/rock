@@ -1,5 +1,6 @@
-use std::fs::File;
+use std::{fmt::Display, fs::File};
 
+use clap::Parser;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{
@@ -10,6 +11,13 @@ use tokio_native_tls::TlsConnector;
 
 const HTTPS_PORT: u16 = 443;
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Arg {
+    #[arg(short, long)]
+    port: u16,
+}
+
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 enum Method {
@@ -17,6 +25,17 @@ enum Method {
     Post,
     Put,
     Delete,
+}
+
+impl Display for Method {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Put => "PUT",
+            Method::Delete => "DELETE",
+        })
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -74,7 +93,18 @@ where
     Ok(())
 }
 
-async fn redirect(client: TcpStream, proxy_addr: ProxyAddr, buf: &[u8]) -> anyhow::Result<()> {
+async fn redirect(
+    client: TcpStream,
+    path: &str,
+    method: Method,
+    proxy_addr: ProxyAddr,
+    buf: &[u8],
+) -> anyhow::Result<()> {
+    println!(
+        "[PROXY] {} {}:{}{}",
+        method, proxy_addr.host, proxy_addr.port, path
+    );
+
     let buf = substitute_hostname(buf, &proxy_addr);
 
     let server = TcpStream::connect(proxy_addr.to_tupple()).await?;
@@ -108,25 +138,27 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
         _ => todo!(),
     };
 
-    let path: &[u8] = visitor
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("should have a path"))?;
+    let path = String::from_utf8_lossy(
+        visitor
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("should have a path"))?,
+    );
 
-    let file = File::open("./interface.json").unwrap();
+    let file = File::open("./interface.json")?;
     let config: Config = serde_json::from_reader(file)?;
 
     let responses = config.responses;
 
     let response = match responses.iter().find(|request| {
-        request.enabled.unwrap_or(true)
-            && request.path.as_bytes() == path
-            && request.method == method
+        request.enabled.unwrap_or(true) && request.path == *path && request.method == method
     }) {
         Some(response) => response,
         None => {
-            return redirect(stream, config.proxy_addr, content).await;
+            return redirect(stream, &path, method, config.proxy_addr, content).await;
         }
     };
+
+    println!("[MOCK]  {} {}", method, path);
 
     let body = serde_json::to_string(&response.body).unwrap();
 
@@ -147,13 +179,16 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
+    let arg = Arg::parse();
+    let listener = TcpListener::bind(("0.0.0.0", arg.port)).await?;
+
+    println!("Rocking on 127.0.0.1:{}", arg.port);
 
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;
         };
 
-        tokio::spawn(async { dbg!(accept(stream).await) });
+        tokio::spawn(accept(stream));
     }
 }
