@@ -33,6 +33,7 @@ impl ProxyAddr {
 
 #[derive(Deserialize, Debug)]
 struct Config {
+    #[serde(rename = "proxy")]
     proxy_addr: ProxyAddr,
     responses: Vec<Response>,
 }
