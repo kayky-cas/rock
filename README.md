@@ -1,6 +1,8 @@
 # Rock
 
-Exemple of a config file
+## Usage
+
+Config file:
 ```json
 {
     "proxy": {
@@ -29,9 +31,6 @@ Exemple of a config file
     ]
 }
 ```
-
-## Usage
-
 ```bash
 rock -p 3000 -f config.json
 ```
