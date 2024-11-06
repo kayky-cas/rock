@@ -1,6 +1,7 @@
-use std::{fmt::Display, fs::File};
+use std::{collections::HashMap, fmt::Display, fs::File};
 
 use clap::Parser;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{
@@ -158,10 +159,19 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
 
     let responses = config.responses;
 
-    let response = match responses.iter().find(|request| {
-        request.enabled.unwrap_or(true) && request.path == *path && request.method == method
-    }) {
-        Some(response) => response,
+    let (response, variables) = match responses
+        .iter()
+        .filter_map(|request| {
+            if !request.enabled.unwrap_or(true) || request.method != method {
+                return None;
+            }
+            extract_variables(&request.path, &path)
+                .ok()
+                .map(|variables| (request, variables))
+        })
+        .nth(0)
+    {
+        Some(r) => r,
         None => {
             return redirect(stream, &path, method, config.proxy_addr, content).await;
         }
@@ -169,12 +179,67 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
 
     println!("[MOCK]  {} {}", method, path);
 
-    let body = serde_json::to_string(&response.body)?;
+    let mut body = serde_json::to_string(&response.body)?;
+
+    for (name, value) in variables {
+        body = body.replace(&format!("{{{name}}}"), value);
+    }
+
     let proto = into_http(response.status, &body);
 
     let _ = stream.write(proto.as_bytes()).await?;
 
     Ok(())
+}
+
+fn extract_variables<'a, 'b>(
+    mut source: &'a str,
+    path: &'b str,
+) -> anyhow::Result<HashMap<&'a str, &'b str>> {
+    if source.starts_with('/') {
+        source = &source[1..];
+    }
+
+    if source.ends_with('/') {
+        source = &source[..source.len() - 1];
+    }
+
+    let mut map = HashMap::new();
+
+    let mut pattern = String::from("^");
+    let mut variable_names = Vec::new();
+
+    for segment in source.split('/') {
+        if segment.starts_with('{') && segment.ends_with('}') {
+            let variable_name = &segment[1..segment.len() - 1];
+            variable_names.push(variable_name);
+            pattern.push_str("/([^/]+)");
+        } else {
+            pattern.push('/');
+            pattern.push_str(segment);
+        }
+    }
+    pattern.push('$');
+
+    let r = Regex::new(&pattern)?;
+
+    if !r.is_match(path) {
+        return Err(anyhow::anyhow!("source and path do not match"));
+    }
+
+    if let Some(captures) = r.captures(path) {
+        for (i, &var_name) in variable_names.iter().enumerate() {
+            if let Some(value) = captures.get(i + 1) {
+                map.insert(var_name, value.as_str());
+            }
+        }
+    }
+
+    if map.len() != variable_names.len() {
+        Err(anyhow::anyhow!("variables do not match"))
+    } else {
+        Ok(map)
+    }
 }
 
 #[tokio::main]
@@ -190,5 +255,30 @@ async fn main() -> anyhow::Result<()> {
         };
 
         tokio::spawn(accept(stream));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::extract_variables;
+
+    #[test]
+    fn test_extract_variables_should_successes() {
+        let src = "/foo/{a}/{b}/baz";
+        let path = "/foo/hello/world/baz";
+
+        let expected = HashMap::from([("a", "hello"), ("b", "world")]);
+
+        assert_eq!(extract_variables(src, path).unwrap(), expected)
+    }
+
+    #[test]
+    fn test_extract_variables_should_fail() {
+        let src = "/foo/{a}/{b}/baz";
+        let path = "/foo/hello";
+
+        assert!(extract_variables(src, path).is_err())
     }
 }

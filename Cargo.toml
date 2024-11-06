@@ -13,3 +13,4 @@ native-tls = "0.2"
 tokio-native-tls = "0.3"
 log = "0.4.22"
 clap = { version = "4.5.20", features = ["derive"] }
+regex = "1.11.1"
