@@ -45,7 +45,7 @@ struct ProxyAddr {
 }
 
 impl ProxyAddr {
-    fn to_tupple(&self) -> (&str, u16) {
+    fn to_tuple(&self) -> (&str, u16) {
         (self.host.as_str(), self.port)
     }
 }
@@ -87,7 +87,7 @@ where
     C: AsyncWrite + Unpin,
     S: AsyncWriteExt + AsyncReadExt + Unpin,
 {
-    let _ = server.write_all(&buf).await?;
+    server.write_all(buf).await?;
     let _ = tokio::io::copy(&mut server, &mut client).await?;
 
     Ok(())
@@ -107,7 +107,7 @@ async fn redirect(
 
     let buf = substitute_hostname(buf, &proxy_addr);
 
-    let server = TcpStream::connect(proxy_addr.to_tupple()).await?;
+    let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
 
     if proxy_addr.port == HTTPS_PORT {
         let connector = native_tls::TlsConnector::new()?;
