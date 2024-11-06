@@ -144,7 +144,7 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
         b"POST" => Method::Post,
         b"PUT" => Method::Put,
         b"DELETE" => Method::Delete,
-        _ => todo!(),
+        method => todo!("{:?}", method),
     };
 
     let path = String::from_utf8_lossy(
