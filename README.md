@@ -7,7 +7,7 @@ Config file:
 {
     "proxy": {
         "host": "google.com",
-        "port": 443 /* or 80 to http */
+        "port": 443 // or 80 to http
     },
     "responses": [
         {
@@ -32,17 +32,17 @@ Config file:
 }
 ```
 ```bash
-rock -p 3000 -f config.json
+$ rock -p 3000 -f config.json
 ```
 ```bash
-curl localhost:3000
-{"message":"hello"}%
+$ curl localhost:3000
+{"message":"hello"}
 ```
 ```bash
-curl localhost:3000/hello/kayky
-{"message":"hello to kayky"}%
+$ curl localhost:3000/hello/kayky
+{"message":"hello to kayky"}
 ```
 ```bash
-curl localhost:3000/images
-# will be redirect to google.com/images
+$ curl localhost:3000/images
+# will be proxied to google.com:443/images
 ```
