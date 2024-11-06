@@ -61,9 +61,18 @@ struct Config {
 struct Response {
     path: String,
     method: Method,
-    status: u16,
+    status: usize,
     body: Value,
     enabled: Option<bool>,
+}
+
+fn into_http(status: usize, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/json; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+        status,
+        body.len(),
+        body
+    )
 }
 
 fn substitute_hostname(buf: &[u8], proxy_addr: &ProxyAddr) -> Vec<u8> {
@@ -160,19 +169,10 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
 
     println!("[MOCK]  {} {}", method, path);
 
-    let body = serde_json::to_string(&response.body).unwrap();
+    let body = serde_json::to_string(&response.body)?;
+    let proto = into_http(response.status, &body);
 
-    let _ = stream
-        .write(
-            format!(
-                "HTTP/1.1 {}\r\nContent-Type: text/json; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
-                response.status,
-                body.len(),
-                body
-            )
-            .as_bytes(),
-        )
-        .await?;
+    let _ = stream.write(proto.as_bytes()).await?;
 
     Ok(())
 }
@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     let arg = Arg::parse();
     let listener = TcpListener::bind(("0.0.0.0", arg.port)).await?;
 
-    println!("Rocking on 127.0.0.1:{}", arg.port);
+    println!("Rocking on :{}", arg.port);
 
     loop {
         let Ok((stream, _)) = listener.accept().await else {
