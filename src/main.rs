@@ -169,7 +169,7 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
                 .ok()
                 .map(|variables| (request, variables))
         })
-        .nth(0)
+        .next()
     {
         Some(r) => r,
         None => {
