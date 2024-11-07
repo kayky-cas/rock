@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fmt::Display, fs::File};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use clap::Parser;
 use regex::Regex;
@@ -17,6 +23,9 @@ const HTTPS_PORT: u16 = 443;
 struct Arg {
     #[arg(short, long)]
     port: u16,
+
+    #[arg(short, long)]
+    file: PathBuf,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -129,7 +138,7 @@ async fn redirect(
     }
 }
 
-async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
+async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<()> {
     let mut buf = [0; 2048];
 
     let n = stream.read(&mut buf[..]).await?;
@@ -154,7 +163,7 @@ async fn accept(mut stream: TcpStream) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("should have a path"))?,
     );
 
-    let file = File::open("./interface.json")?;
+    let file = File::open(file_path)?;
     let config: Config = serde_json::from_reader(file)?;
 
     let responses = config.responses;
@@ -247,6 +256,8 @@ async fn main() -> anyhow::Result<()> {
     let arg = Arg::parse();
     let listener = TcpListener::bind(("0.0.0.0", arg.port)).await?;
 
+    let file_path: Arc<Path> = arg.file.into();
+
     println!("Rocking on :{}", arg.port);
 
     loop {
@@ -254,7 +265,7 @@ async fn main() -> anyhow::Result<()> {
             continue;
         };
 
-        tokio::spawn(accept(stream));
+        tokio::spawn(accept(stream, file_path.clone()));
     }
 }
 
