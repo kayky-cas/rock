@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fmt::Display,
+    fmt::{Debug, Display},
     fs::File,
     path::{Path, PathBuf},
     sync::Arc,
@@ -28,7 +28,7 @@ struct Arg {
     file: PathBuf,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 enum Method {
     Get,
@@ -37,7 +37,7 @@ enum Method {
     Delete,
 }
 
-impl Display for Method {
+impl Debug for Method {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Method::Get => "GET",
@@ -45,6 +45,12 @@ impl Display for Method {
             Method::Put => "PUT",
             Method::Delete => "DELETE",
         })
+    }
+}
+
+impl Display for Method {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&self, f)
     }
 }
 
@@ -174,7 +180,10 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
             if !request.enabled.unwrap_or(true) || request.method != method {
                 return None;
             }
-            extract_variables(&request.path, &path)
+
+            let variables = PathVariables::new(&request.path);
+
+            extract_variables(&variables, &path)
                 .ok()
                 .map(|variables| (request, variables))
         })
@@ -201,54 +210,67 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
     Ok(())
 }
 
-fn extract_variables<'a, 'b>(
-    mut source: &'a str,
-    path: &'b str,
-) -> anyhow::Result<HashMap<&'a str, &'b str>> {
-    if source.starts_with('/') {
-        source = &source[1..];
-    }
+struct PathVariables<'a> {
+    variables: Vec<&'a str>,
+    match_pattern: String,
+}
 
-    if source.ends_with('/') {
-        source = &source[..source.len() - 1];
-    }
+impl<'a> PathVariables<'a> {
+    fn new(mut source: &'a str) -> PathVariables<'a> {
+        if source.starts_with('/') {
+            source = &source[1..];
+        }
 
-    let mut map = HashMap::new();
+        if source.ends_with('/') {
+            source = &source[..source.len() - 1];
+        }
 
-    let mut pattern = String::from("^");
-    let mut variable_names = Vec::new();
+        let mut match_pattern = String::from("^");
+        let mut variables = Vec::new();
 
-    for segment in source.split('/') {
-        if segment.starts_with('{') && segment.ends_with('}') {
-            let variable_name = &segment[1..segment.len() - 1];
-            variable_names.push(variable_name);
-            pattern.push_str("/([^/]+)");
-        } else {
-            pattern.push('/');
-            pattern.push_str(segment);
+        for segment in source.split('/') {
+            if segment.starts_with('{') && segment.ends_with('}') {
+                let variable_name = &segment[1..segment.len() - 1];
+                if !variable_name.is_empty() {
+                    variables.push(variable_name);
+                }
+                match_pattern.push_str("/([^/]+)");
+            } else {
+                match_pattern.push('/');
+                match_pattern.push_str(segment);
+            }
+        }
+
+        match_pattern.push('$');
+
+        PathVariables {
+            variables,
+            match_pattern,
         }
     }
-    pattern.push('$');
+}
 
-    let r = Regex::new(&pattern)?;
+fn extract_variables<'a, 'b>(
+    variables: &PathVariables<'a>,
+    path: &'b str,
+) -> anyhow::Result<HashMap<&'a str, &'b str>> {
+    let r = Regex::new(&variables.match_pattern)?;
 
     if !r.is_match(path) {
         return Err(anyhow::anyhow!("source and path do not match"));
     }
 
+    let mut map = HashMap::new();
+
     if let Some(captures) = r.captures(path) {
-        for (i, &var_name) in variable_names.iter().enumerate() {
+        for (i, &var_name) in variables.variables.iter().enumerate() {
             if let Some(value) = captures.get(i + 1) {
                 map.insert(var_name, value.as_str());
             }
         }
     }
 
-    if map.len() != variable_names.len() {
-        Err(anyhow::anyhow!("variables do not match"))
-    } else {
-        Ok(map)
-    }
+    Ok(map)
 }
 
 #[tokio::main]
@@ -273,7 +295,25 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::extract_variables;
+    use crate::{extract_variables, PathVariables};
+
+    #[test]
+    fn test_path_variables() {
+        let src = "/foo/{a}/{b}/baz";
+        let path = PathVariables::new(src);
+
+        assert_eq!(path.match_pattern, "^/foo/([^/]+)/([^/]+)/baz$");
+        assert_eq!(path.variables, ["a", "b"])
+    }
+
+    #[test]
+    fn test_path_variables_empty() {
+        let src = "/foo/{}/{}/baz";
+        let path = PathVariables::new(src);
+
+        assert_eq!(path.match_pattern, "^/foo/([^/]+)/([^/]+)/baz$");
+        assert!(path.variables.is_empty())
+    }
 
     #[test]
     fn test_extract_variables_should_successes() {
@@ -282,7 +322,9 @@ mod tests {
 
         let expected = HashMap::from([("a", "hello"), ("b", "world")]);
 
-        assert_eq!(extract_variables(src, path).unwrap(), expected)
+        let variables = PathVariables::new(src);
+
+        assert_eq!(extract_variables(&variables, path).unwrap(), expected)
     }
 
     #[test]
@@ -290,6 +332,32 @@ mod tests {
         let src = "/foo/{a}/{b}/baz";
         let path = "/foo/hello";
 
-        assert!(extract_variables(src, path).is_err())
+        let variables = PathVariables::new(src);
+
+        assert!(extract_variables(&variables, path).is_err())
+    }
+
+    #[test]
+    fn test_extract_variables_should() {
+        let src = "/foo/{a}/{}/baz";
+        let path = "/foo/hello/foo/baz";
+
+        let expected = HashMap::from([("a", "hello")]);
+
+        let variables = PathVariables::new(src);
+
+        assert_eq!(extract_variables(&variables, path).unwrap(), expected)
+    }
+
+    #[test]
+    fn test_extract_variables_should2() {
+        let src = "/foo/{}/{}/baz";
+        let path = "/foo/hello/foo/baz";
+
+        let expected = HashMap::new();
+
+        let variables = PathVariables::new(src);
+
+        assert_eq!(extract_variables(&variables, path).unwrap(), expected)
     }
 }
