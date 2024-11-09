@@ -70,16 +70,40 @@ impl ProxyAddr {
 struct Config {
     #[serde(rename = "proxy")]
     proxy_addr: ProxyAddr,
-    responses: Vec<Response>,
+    responses: Vec<ConfigResponse>,
 }
 
 #[derive(Deserialize, Debug)]
-struct Response {
+struct ConfigResponse {
     path: String,
     method: Method,
     status: usize,
     body: Value,
     enabled: Option<bool>,
+}
+
+struct Response {
+    status: usize,
+    body: String,
+}
+
+impl Response {
+    fn try_new(response: &ConfigResponse, variables: HashMap<&str, &str>) -> anyhow::Result<Self> {
+        let mut body = serde_json::to_string(&response.body)?;
+
+        for (name, value) in variables {
+            body = body.replace(&format!("{{{name}}}"), value);
+        }
+
+        Ok(Self {
+            status: response.status,
+            body: serde_json::to_string(&response.body).unwrap(),
+        })
+    }
+
+    fn as_http(&self) -> String {
+        into_http(self.status, &self.body)
+    }
 }
 
 fn into_http(status: usize, body: &str) -> String {
@@ -96,15 +120,15 @@ fn substitute_hostname(buf: &[u8], proxy_addr: &ProxyAddr) -> Vec<u8> {
 
     request_str
         .lines()
-        .flat_map(|line| {
+        .map(|line| {
             if line.starts_with("Host:") {
                 format!("Host: {}:{}\r\n", proxy_addr.host, proxy_addr.port)
             } else {
                 format!("{}\r\n", line)
             }
-            .into_bytes()
         })
-        .collect()
+        .collect::<String>()
+        .into_bytes()
 }
 
 async fn proxy<C, S>(mut client: C, mut server: S, buf: &[u8]) -> anyhow::Result<()>
@@ -113,8 +137,7 @@ where
     S: AsyncWriteExt + AsyncReadExt + Unpin,
 {
     server.write_all(buf).await?;
-    let _ = tokio::io::copy(&mut server, &mut client).await?;
-
+    tokio::io::copy(&mut server, &mut client).await?;
     Ok(())
 }
 
@@ -131,12 +154,10 @@ async fn redirect(
     );
 
     let buf = substitute_hostname(buf, &proxy_addr);
-
     let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
 
     if proxy_addr.port == HTTPS_PORT {
-        let connector = native_tls::TlsConnector::new()?;
-        let connector = TlsConnector::from(connector);
+        let connector = TlsConnector::from(native_tls::TlsConnector::new()?);
         let server = connector.connect(&proxy_addr.host, server).await?;
         proxy(client, server, &buf).await
     } else {
@@ -147,26 +168,29 @@ async fn redirect(
 async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<()> {
     let mut buf = [0; 2048];
 
-    let n = stream.read(&mut buf[..]).await?;
+    let n = stream.read(&mut buf).await?;
     let content = &buf[..n];
 
     let mut visitor = content.split(|b| *b == b' ');
 
     let method: Method = match visitor
         .next()
-        .ok_or_else(|| anyhow::anyhow!("should have a method"))?
+        .ok_or_else(|| anyhow::anyhow!("missing method"))?
     {
         b"GET" => Method::Get,
         b"POST" => Method::Post,
         b"PUT" => Method::Put,
         b"DELETE" => Method::Delete,
-        method => todo!("{:?}", method),
+        method => anyhow::bail!(
+            "unsupported HTTP method {}",
+            String::from_utf8_lossy(method)
+        ),
     };
 
     let path = String::from_utf8_lossy(
         visitor
             .next()
-            .ok_or_else(|| anyhow::anyhow!("should have a path"))?,
+            .ok_or_else(|| anyhow::anyhow!("missing path"))?,
     );
 
     let file = File::open(file_path)?;
@@ -174,38 +198,21 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
 
     let responses = config.responses;
 
-    let (response, variables) = match responses
+    let Some(response) = responses
         .iter()
-        .filter_map(|request| {
-            if !request.enabled.unwrap_or(true) || request.method != method {
-                return None;
-            }
-
+        .filter(|request| request.enabled.unwrap_or(true) && request.method == method)
+        .find_map(|request| {
             let variables = PathVariables::new(&request.path);
+            let variables_table = extract_variables(&variables, &path).ok()?;
 
-            extract_variables(&variables, &path)
-                .ok()
-                .map(|variables| (request, variables))
+            Response::try_new(request, variables_table).ok()
         })
-        .next()
-    {
-        Some(r) => r,
-        None => {
-            return redirect(stream, &path, method, config.proxy_addr, content).await;
-        }
+    else {
+        return redirect(stream, &path, method, config.proxy_addr, content).await;
     };
 
     println!("[MOCK]  {} {}", method, path);
-
-    let mut body = serde_json::to_string(&response.body)?;
-
-    for (name, value) in variables {
-        body = body.replace(&format!("{{{name}}}"), value);
-    }
-
-    let proto = into_http(response.status, &body);
-
-    let _ = stream.write(proto.as_bytes()).await?;
+    let _ = stream.write(response.as_http().as_bytes()).await?;
 
     Ok(())
 }
