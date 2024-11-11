@@ -97,22 +97,18 @@ impl Response {
 
         Ok(Self {
             status: response.status,
-            body: serde_json::to_string(&response.body).unwrap(),
+            body,
         })
     }
 
     fn as_http(&self) -> String {
-        into_http(self.status, &self.body)
+        format!(
+            "HTTP/1.1 {}\r\nContent-Type: text/json; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+            self.status,
+            self.body.len(),
+            self.body
+        )
     }
-}
-
-fn into_http(status: usize, body: &str) -> String {
-    format!(
-        "HTTP/1.1 {}\r\nContent-Type: text/json; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
-        status,
-        body.len(),
-        body
-    )
 }
 
 fn substitute_hostname(buf: &[u8], proxy_addr: &ProxyAddr) -> Vec<u8> {
@@ -264,7 +260,7 @@ fn extract_variables<'a, 'b>(
     let r = Regex::new(&variables.match_pattern)?;
 
     if !r.is_match(path) {
-        return Err(anyhow::anyhow!("source and path do not match"));
+        anyhow::bail!("source and path do not match")
     }
 
     let mut map = HashMap::new();
