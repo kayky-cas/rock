@@ -34,19 +34,19 @@ pub(crate) struct Response {
 
 impl Response {
     pub(crate) fn try_new(
-        response: &crate::ConfigResponse,
+        response: &crate::config::ConfigResponse,
         variables: variable::VariableMap,
     ) -> anyhow::Result<Self> {
-        let mut body = serde_json::to_string(&response.body)?;
+        let mut body = serde_json::to_string(response.body())?;
 
         for (name, value) in variables {
             body = body.replace(&format!("{{{name}}}"), value);
         }
 
         Ok(Self {
-            status: response.status,
+            status: response.status(),
             body,
-            content_type: ContentType::from(&response.body),
+            content_type: ContentType::from(response.body()),
         })
     }
 

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Deserialize, PartialEq, Debug)]
+#[derive(Deserialize, PartialEq, Debug, Clone, Copy)]
 #[serde(rename_all = "UPPERCASE")]
 pub(crate) enum ConfigMethod {
     Get,
@@ -89,6 +89,14 @@ pub(crate) struct ConfigResponse {
 impl ConfigResponse {
     pub(crate) fn path(&self) -> &str {
         self.path.as_str()
+    }
+
+    pub(crate) fn status(&self) -> usize {
+        self.status
+    }
+
+    pub(crate) fn body(&self) -> &Value {
+        &self.body
     }
 
     pub(crate) fn is_valid(&self, method: ConfigMethod) -> bool {

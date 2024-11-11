@@ -27,7 +27,7 @@ struct Arg {
     file: PathBuf,
 }
 
-fn substitute_hostname(buf: &[u8], proxy_addr: &config::ProxyAddr) -> Vec<u8> {
+fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
     let request_str = String::from_utf8_lossy(buf);
 
     // TODO: convert this to use regex
@@ -35,7 +35,7 @@ fn substitute_hostname(buf: &[u8], proxy_addr: &config::ProxyAddr) -> Vec<u8> {
         .lines()
         .map(|line| {
             if line.starts_with("Host:") {
-                format!("Host: {}:{}\r\n", proxy_addr.host(), proxy_addr.port())
+                format!("Host: {}\r\n", host)
             } else {
                 format!("{}\r\n", line)
             }
@@ -69,7 +69,7 @@ async fn redirect(
         path
     );
 
-    let buf = substitute_hostname(buf, &proxy_addr);
+    let buf = substitute_hostname(buf, proxy_addr.host());
     let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
 
     if proxy_addr.port() == HTTPS_DEFAULT_PORT {
@@ -107,11 +107,11 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
         .responses()
         .iter()
         .filter(|response| response.is_valid(method))
-        .find_map(|response| {
-            let variables = variable::PathVariables::new(response.path());
+        .find_map(|request| {
+            let variables = variable::PathVariables::new(request.path());
             let variables_table = variable::extract_variables(&variables, &path).ok()?;
 
-            response::Response::try_new(response, variables_table).ok()
+            response::Response::try_new(request, variables_table).ok()
         })
     else {
         return redirect(stream, &path, method, config.proxy_addr(), content).await;
