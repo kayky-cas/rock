@@ -8,6 +8,7 @@ mod config;
 mod response;
 mod variable;
 
+use anyhow::Context;
 use clap::Parser;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -44,13 +45,24 @@ fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
         .into_bytes()
 }
 
-async fn proxy<C, S>(mut client: C, mut server: S, buf: &[u8]) -> anyhow::Result<()>
+async fn proxy<W, R>(
+    mut client: TcpStream,
+    mut writer: W,
+    mut reader: R,
+    buf: &[u8],
+) -> anyhow::Result<()>
 where
-    C: AsyncWrite + Unpin,
-    S: AsyncWriteExt + AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+    R: AsyncReadExt + Unpin,
 {
-    server.write_all(buf).await?;
-    tokio::io::copy(&mut server, &mut client).await?;
+    let (c, w) = tokio::join!(
+        tokio::io::copy(&mut reader, &mut client),
+        writer.write_all(buf),
+    );
+
+    c.context("failed to copy from server to client")?;
+    w.context("failed to copy from client to server")?;
+
     Ok(())
 }
 
@@ -72,13 +84,9 @@ async fn redirect(
     let buf = substitute_hostname(buf, proxy_addr.host());
     let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
 
-    if proxy_addr.port() == HTTPS_DEFAULT_PORT {
-        let connector = TlsConnector::from(native_tls::TlsConnector::new()?);
-        let server = connector.connect(proxy_addr.host(), server).await?;
-        proxy(client, server, &buf).await
-    } else {
-        proxy(client, server, &buf).await
-    }
+    let (r, w) = server.into_split();
+
+    proxy(client, w, r, &buf).await
 }
 
 async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<()> {
