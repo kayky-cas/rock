@@ -12,7 +12,7 @@ Config file:
     "responses": [
         {
             "path": "/",
-            "method": "get",
+            "method": "GET",
             "enabled": true,
             "status": 200,
             "body": {
@@ -21,7 +21,7 @@ Config file:
         },
         {
             "path": "/hello/{a}",
-            "method": "get",
+            "method": "GET",
             "enabled": true,
             "status": 200,
             "body": {
