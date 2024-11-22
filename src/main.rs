@@ -26,8 +26,12 @@ struct Arg {
 }
 
 fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
+    let expr = r"Host: ([^\r\n]+)";
+    let r = regex::Regex::new(expr)
+        .with_context(|| format!("failed to compile regex: {}", expr))
+        .unwrap();
+
     let request_str = String::from_utf8_lossy(buf);
-    let r = regex::Regex::new(r"Host: ([^\r\n]+)").expect("should be a valid regex");
 
     r.replace_all(&request_str, format!("Host: {}", host))
         .to_string()
@@ -44,13 +48,12 @@ where
     W: AsyncWriteExt + Unpin,
     R: AsyncReadExt + Unpin,
 {
-    let (c, w) = tokio::join!(
+    tokio::try_join!(
         tokio::io::copy(&mut reader, &mut client),
         writer.write_all(buf),
-    );
-
-    c.context("failed to copy from server to client")?;
-    w.context("failed to copy from client to server")
+    )
+    .map(|_| ())
+    .context("failed to proxy")
 }
 
 async fn redirect(
