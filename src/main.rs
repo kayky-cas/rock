@@ -11,12 +11,9 @@ mod variable;
 use anyhow::Context;
 use clap::Parser;
 use tokio::{
-    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_native_tls::TlsConnector;
-
-const HTTPS_DEFAULT_PORT: u16 = 443;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -30,18 +27,10 @@ struct Arg {
 
 fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
     let request_str = String::from_utf8_lossy(buf);
+    let r = regex::Regex::new(r"Host: ([^\r\n]+)").expect("should be a valid regex");
 
-    // TODO: convert this to use regex
-    request_str
-        .lines()
-        .map(|line| {
-            if line.starts_with("Host:") {
-                format!("Host: {}\r\n", host)
-            } else {
-                format!("{}\r\n", line)
-            }
-        })
-        .collect::<String>()
+    r.replace_all(&request_str, format!("Host: {}", host))
+        .to_string()
         .into_bytes()
 }
 
@@ -61,9 +50,7 @@ where
     );
 
     c.context("failed to copy from server to client")?;
-    w.context("failed to copy from client to server")?;
-
-    Ok(())
+    w.context("failed to copy from client to server")
 }
 
 async fn redirect(
@@ -82,11 +69,23 @@ async fn redirect(
     );
 
     let buf = substitute_hostname(buf, proxy_addr.host());
+
     let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
 
-    let (r, w) = server.into_split();
+    if proxy_addr.port() == 443 {
+        let connector = tokio_native_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
 
-    proxy(client, w, r, &buf).await
+        let stream = connector
+            .connect(proxy_addr.host(), server)
+            .await
+            .context("failed to connect to server")?;
+
+        let (r, w) = tokio::io::split(stream);
+        proxy(client, w, r, &buf).await
+    } else {
+        let (r, w) = server.into_split();
+        proxy(client, w, r, &buf).await
+    }
 }
 
 async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<()> {
@@ -125,7 +124,7 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
         return redirect(stream, &path, method, config.proxy_addr(), content).await;
     };
 
-    println!("[MOCK]  {} {}", method, path);
+    println!("[MOCKS] {} {}", method, path);
     let _ = stream.write(response.as_http().as_bytes()).await?;
 
     Ok(())
