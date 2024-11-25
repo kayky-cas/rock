@@ -13,7 +13,10 @@ use clap::Parser;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::OnceCell,
 };
+
+static HOST_RE: OnceCell<regex::Regex> = OnceCell::const_new();
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -28,17 +31,18 @@ struct Arg {
     show_body: bool,
 }
 
-fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
-    let expr = r"Host: ([^\r\n]+)";
-    let r = regex::Regex::new(expr)
-        .with_context(|| format!("failed to compile regex: {}", expr))
-        .unwrap();
-
+async fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
     let request_str = String::from_utf8_lossy(buf);
 
-    r.replace_all(&request_str, format!("Host: {}", host))
-        .to_string()
-        .into_bytes()
+    let buf = HOST_RE
+        .get_or_init(|| async { regex::Regex::new(r"Host: ([^\r\n]+)").expect("invalid regex") })
+        .await
+        .replace_all(&request_str, format!("Host: {}", host));
+
+    match buf {
+        std::borrow::Cow::Borrowed(_) => buf.as_bytes().to_vec(),
+        std::borrow::Cow::Owned(buf) => buf.into_bytes(),
+    }
 }
 
 async fn proxy<W, R>(
@@ -72,9 +76,12 @@ async fn redirect(
         path
     );
 
-    let buf = substitute_hostname(buf, proxy_addr.host());
+    let (buf, server) = tokio::join!(
+        substitute_hostname(buf, proxy_addr.host()),
+        TcpStream::connect(proxy_addr.to_tuple())
+    );
 
-    let server = TcpStream::connect(proxy_addr.to_tuple()).await?;
+    let server = server.context("failed to connect to server")?;
 
     if proxy_addr.port() == 443 {
         let connector = tokio_native_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
