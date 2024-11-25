@@ -23,6 +23,9 @@ struct Arg {
 
     #[arg(short, long)]
     file: PathBuf,
+
+    #[arg(short, long, default_value = "false")]
+    show_body: bool,
 }
 
 fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
@@ -39,7 +42,7 @@ fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
 }
 
 async fn proxy<W, R>(
-    mut client: TcpStream,
+    client: &mut TcpStream,
     mut writer: W,
     mut reader: R,
     buf: &[u8],
@@ -48,16 +51,14 @@ where
     W: AsyncWriteExt + Unpin,
     R: AsyncReadExt + Unpin,
 {
-    tokio::try_join!(
-        tokio::io::copy(&mut reader, &mut client),
-        writer.write_all(buf),
-    )
-    .map(|_| ())
-    .context("failed to proxy")
+    tokio::try_join!(tokio::io::copy(&mut reader, client), writer.write_all(buf))
+        .context("failed to proxy")?;
+
+    Ok(())
 }
 
 async fn redirect(
-    client: TcpStream,
+    client: &mut TcpStream,
     path: &str,
     method: config::ConfigMethod,
     proxy_addr: &config::ProxyAddr,
@@ -91,7 +92,7 @@ async fn redirect(
     }
 }
 
-async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<()> {
+async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> {
     let mut buf = [0; 1024 * 4];
 
     let n = stream.read(&mut buf).await?;
@@ -99,16 +100,8 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
 
     let mut visitor = content.split(|b| *b == b' ');
 
-    let method = visitor
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing method"))?
-        .try_into()?;
-
-    let path = String::from_utf8_lossy(
-        visitor
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("missing path"))?,
-    );
+    let method = visitor.next().context("missing method")?.try_into()?;
+    let path = String::from_utf8_lossy(visitor.next().context("missing path")?);
 
     let file = File::open(file_path)?;
     let config: config::Config = serde_json::from_reader(file)?;
@@ -127,8 +120,8 @@ async fn accept(mut stream: TcpStream, file_path: Arc<Path>) -> anyhow::Result<(
         return redirect(stream, &path, method, config.proxy_addr(), content).await;
     };
 
-    println!("[MOCKS] {} {}", method, path);
     let _ = stream.write(response.as_http().as_bytes()).await?;
+    println!("[MOCKS] {} {}", method, path);
 
     Ok(())
 }
@@ -143,14 +136,18 @@ async fn main() -> anyhow::Result<()> {
     println!("Rocking on :{}", arg.port);
 
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
+        let Ok((mut stream, _)) = listener.accept().await else {
             continue;
         };
 
         let file_path = file_path.clone();
-        tokio::spawn(async {
-            if let Err(err) = accept(stream, file_path).await {
+        tokio::spawn(async move {
+            if let Err(err) = accept(&mut stream, &file_path).await {
                 eprintln!("[ERROR] {}", err);
+            }
+
+            if let Err(err) = stream.shutdown().await {
+                eprintln!("[ERROR] failed to shutdown stream: {}", err);
             }
         });
     }
