@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fs::File,
     path::{Path, PathBuf},
     sync::Arc,
@@ -28,18 +29,11 @@ struct Arg {
     file: PathBuf,
 }
 
-async fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
-    let request_str = String::from_utf8_lossy(buf);
-
-    let buf = HOST_RE
+async fn substitute_hostname<'a>(buf: &'a str, host: &str) -> Cow<'a, str> {
+    HOST_RE
         .get_or_init(|| async { regex::Regex::new(r"Host: ([^\r\n]+)").expect("invalid regex") })
         .await
-        .replace_all(&request_str, format!("Host: {}", host));
-
-    match buf {
-        std::borrow::Cow::Borrowed(_) => buf.as_bytes().to_vec(),
-        std::borrow::Cow::Owned(buf) => buf.into_bytes(),
-    }
+        .replace_all(buf, format!("Host: {}", host))
 }
 
 async fn proxy<W, R>(
@@ -73,8 +67,10 @@ async fn redirect(
         path
     );
 
+    let buf = String::from_utf8_lossy(buf);
+
     let (buf, server) = tokio::join!(
-        substitute_hostname(buf, proxy_addr.host()),
+        substitute_hostname(&buf, proxy_addr.host()),
         TcpStream::connect(proxy_addr.to_tuple())
     );
 
@@ -89,10 +85,10 @@ async fn redirect(
             .context("failed to connect to server")?;
 
         let (r, w) = tokio::io::split(stream);
-        proxy(client, w, r, &buf).await
+        proxy(client, w, r, buf.as_bytes()).await
     } else {
         let (r, w) = server.into_split();
-        proxy(client, w, r, &buf).await
+        proxy(client, w, r, buf.as_bytes()).await
     }
 }
 
