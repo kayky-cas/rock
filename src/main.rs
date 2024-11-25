@@ -26,9 +26,6 @@ struct Arg {
 
     #[arg(short, long)]
     file: PathBuf,
-
-    #[arg(short, long, default_value = "false")]
-    show_body: bool,
 }
 
 async fn substitute_hostname(buf: &[u8], host: &str) -> Vec<u8> {
