@@ -1,5 +1,9 @@
 # Rock
 
+## TODOs
+
+- [ ] Extract path params to use them
+
 ## Usage
 
 Config file:

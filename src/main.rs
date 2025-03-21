@@ -101,7 +101,14 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
     let mut visitor = content.split(|b| *b == b' ');
 
     let method = visitor.next().context("missing method")?.try_into()?;
-    let path = String::from_utf8_lossy(visitor.next().context("missing path")?);
+
+    let full_path = visitor.next().context("missing path")?;
+    let paths_end = full_path
+        .iter()
+        .position(|&c| c == b'?')
+        .unwrap_or(full_path.len());
+
+    let path = String::from_utf8_lossy(&full_path[..paths_end]);
 
     let file = File::open(file_path)?;
     let config: config::Config = serde_json::from_reader(file)?;
