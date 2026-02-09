@@ -113,7 +113,7 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
     let file = File::open(file_path)?;
     let config: config::Config = serde_json::from_reader(file)?;
 
-    let Some(response) = config
+    let Some((response, per_request_delay)) = config
         .responses()
         .iter()
         .filter(|response| response.is_valid(method))
@@ -121,11 +121,19 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
             let variables = variable::PathVariables::new(request.path());
             let variables_table = variable::extract_variables(&variables, &path).ok()?;
 
-            response::Response::try_new(request, variables_table).ok()
+            let response = response::Response::try_new(request, variables_table).ok()?;
+            Some((response, request.delay()))
         })
     else {
+        if let Some(ms) = config.delay() {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
         return redirect(stream, &path, method, config.proxy_addr(), content).await;
     };
+
+    if let Some(ms) = per_request_delay.or(config.delay()) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
 
     let _ = stream.write(response.as_http().as_bytes()).await?;
     println!("[MOCKS] {} {}", method, path);

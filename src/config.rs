@@ -64,6 +64,7 @@ impl ProxyAddr {
 pub(crate) struct Config {
     #[serde(rename = "proxy")]
     proxy_addr: ProxyAddr,
+    delay: Option<u64>,
     responses: Vec<ConfigResponse>,
 }
 
@@ -75,6 +76,10 @@ impl Config {
     pub(crate) fn responses(&self) -> &[ConfigResponse] {
         self.responses.as_slice()
     }
+
+    pub(crate) fn delay(&self) -> Option<u64> {
+        self.delay
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -84,6 +89,7 @@ pub(crate) struct ConfigResponse {
     status: usize,
     body: Value,
     enabled: Option<bool>,
+    delay: Option<u64>,
 }
 
 impl ConfigResponse {
@@ -97,6 +103,10 @@ impl ConfigResponse {
 
     pub(crate) fn body(&self) -> &Value {
         &self.body
+    }
+
+    pub(crate) fn delay(&self) -> Option<u64> {
+        self.delay
     }
 
     pub(crate) fn is_valid(&self, method: ConfigMethod) -> bool {
