@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
-use crate::variable;
+use crate::{params, variable};
 
 enum ContentType {
     Json,
@@ -27,18 +27,6 @@ impl Display for ContentType {
     }
 }
 
-fn resolve_body_field(body: &serde_json::Value, key: &str) -> Option<String> {
-    let mut current = body;
-    for part in key.split('.') {
-        current = current.get(part)?;
-    }
-    match current {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Null => None,
-        other => Some(other.to_string()),
-    }
-}
-
 pub(crate) struct Response {
     status: usize,
     body: String,
@@ -54,27 +42,7 @@ impl Response {
     ) -> anyhow::Result<Self> {
         let mut body = serde_json::to_string(response.body())?;
 
-        for (name, value) in &path_vars {
-            body = body.replace(&format!("{{/{name}}}"), value);
-        }
-
-        for (name, value) in query_params {
-            body = body.replace(&format!("{{?{name}}}"), value);
-        }
-
-        // Replace {#key} and {#key.nested} with values from request body
-        while let Some(start) = body.find("{#") {
-            let Some(end) = body[start..].find('}') else {
-                break;
-            };
-            let end = start + end;
-            let key = &body[start + 2..end];
-            if let Some(value) = resolve_body_field(request_body, key) {
-                body = body[..start].to_string() + &value + &body[end + 1..];
-            } else {
-                break;
-            }
-        }
+        params::substitute(&mut body, &path_vars, query_params, request_body);
 
         Ok(Self {
             status: response.status(),

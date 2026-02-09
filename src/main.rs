@@ -1,12 +1,12 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 mod config;
+mod params;
 mod response;
 mod variable;
 
@@ -111,23 +111,8 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
 
     let path = String::from_utf8_lossy(&full_path[..paths_end]);
 
-    let query_params: HashMap<String, String> = if paths_end < full_path.len() {
-        String::from_utf8_lossy(&full_path[paths_end + 1..])
-            .split('&')
-            .filter_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                Some((parts.next()?.to_string(), parts.next()?.to_string()))
-            })
-            .collect()
-    } else {
-        HashMap::new()
-    };
-
-    let request_body: serde_json::Value = content
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .and_then(|pos| serde_json::from_slice(&content[pos + 4..]).ok())
-        .unwrap_or(serde_json::Value::Null);
+    let query_params = params::parse_query(full_path, paths_end);
+    let request_body = params::parse_body(content);
 
     let file = File::open(file_path)?;
     let config: config::Config = serde_json::from_reader(file)?;
