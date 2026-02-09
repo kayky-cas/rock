@@ -1,9 +1,5 @@
 # Rock
 
-## TODOs
-
-- [ ] Extract path params to use them
-
 ## Usage
 
 Config file:
@@ -30,13 +26,47 @@ Config file:
             "enabled": true,
             "status": 200,
             "body": {
-                "message": "hello to {a}"
+                "message": "hello to {/a}"
             },
             "delay": 100
         }
     ]
 }
 ```
+
+## Response Variables
+
+You can substitute dynamic values into mock response bodies using three variable sources:
+
+- `{/name}` — **Path parameter**: extracted from the route pattern (e.g. `/users/{id}`)
+- `{?name}` — **Query parameter**: extracted from the query string (e.g. `?q=hello`)
+- `{#name}` — **Request body field**: extracted from the JSON request body, supports dot notation for nested fields (e.g. `{#address.city}`)
+
+Route patterns still use `{name}` without a prefix (e.g. `"path": "/users/{id}"`). The prefix is only used in the response `body` to indicate where the value comes from.
+
+```json
+{
+    "proxy": { "host": "example.com", "port": 443 },
+    "responses": [
+        {
+            "path": "/users/{id}",
+            "method": "POST",
+            "status": 200,
+            "body": {
+                "id": "{/id}",
+                "search": "{?q}",
+                "username": "{#username}",
+                "city": "{#address.city}"
+            }
+        }
+    ]
+}
+```
+
+**Request:** `POST /users/42?q=hello` with body `{"username": "kai", "address": {"city": "SP"}}`
+**Response:** `{"id": "42", "search": "hello", "username": "kai", "city": "SP"}`
+
+If a placeholder cannot be resolved (missing param, no body, etc.), it remains as-is in the response.
 
 ## Delay
 

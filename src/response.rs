@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 
-use crate::variable;
+use crate::{params, variable};
 
 enum ContentType {
     Json,
@@ -35,13 +36,13 @@ pub(crate) struct Response {
 impl Response {
     pub(crate) fn try_new(
         response: &crate::config::ConfigResponse,
-        variables: variable::VariableMap,
+        path_vars: variable::VariableMap,
+        query_params: &HashMap<String, String>,
+        request_body: &serde_json::Value,
     ) -> anyhow::Result<Self> {
         let mut body = serde_json::to_string(response.body())?;
 
-        for (name, value) in variables {
-            body = body.replace(&format!("{{{name}}}"), value);
-        }
+        params::substitute(&mut body, &path_vars, query_params, request_body);
 
         Ok(Self {
             status: response.status(),

@@ -6,6 +6,7 @@ use std::{
 };
 
 mod config;
+mod params;
 mod response;
 mod variable;
 
@@ -110,6 +111,9 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
 
     let path = String::from_utf8_lossy(&full_path[..paths_end]);
 
+    let query_params = params::parse_query(full_path, paths_end);
+    let request_body = params::parse_body(content);
+
     let file = File::open(file_path)?;
     let config: config::Config = serde_json::from_reader(file)?;
 
@@ -121,7 +125,9 @@ async fn accept(stream: &mut TcpStream, file_path: &Path) -> anyhow::Result<()> 
             let variables = variable::PathVariables::new(request.path());
             let variables_table = variable::extract_variables(&variables, &path).ok()?;
 
-            let response = response::Response::try_new(request, variables_table).ok()?;
+            let response = response::Response::try_new(
+                request, variables_table, &query_params, &request_body,
+            ).ok()?;
             Some((response, request.delay()))
         })
     else {
